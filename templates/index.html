@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>楼宇保温试点 · 报告合算核算</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <h1>楼宇保温试点报告合算页</h1>
+    <p class="subtitle">
+      各楼估计独立且同均值；按报告共用楼宇形成的协方差，求最小方差线性无偏估计（BLUE）。
+      均值按精确小数或分数核对。
+    </p>
+    <nav class="api-links">
+      <a href="/api/state">JSON 状态</a>
+      <a href="/api/computation">合算结果 JSON</a>
+      <a href="/healthz">健康检查</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap layout">
+  {% if error %}
+    <div class="banner error" role="alert" id="error-message">{{ error }}</div>
+  {% endif %}
+  {% if success %}
+    <div class="banner success" role="status" id="success-message">{{ success }}</div>
+  {% endif %}
+
+  <section class="card" id="building-section">
+    <div class="card-head">
+      <h2><span class="step">1</span>录入本轮固定正方差</h2>
+      <span class="pill" id="building-count-pill">
+        当前 {{ state.buildings|length if state else 0 }} / {{ max_buildings }} 栋
+      </span>
+    </div>
+
+    {% if state and state.buildings %}
+      <table class="data-table" id="building-table">
+        <thead>
+          <tr><th>楼号</th><th>编号</th><th>固定方差 σ²</th><th>小数</th></tr>
+        </thead>
+        <tbody>
+        {% for building in state.buildings %}
+          <tr data-building-no="{{ building.building_no }}">
+            <td>{{ building.building_no }}</td>
+            <td class="building-code">{{ building.code }}</td>
+            <td class="exact-number">{{ building.variance_text }}</td>
+            <td>{{ building.variance_text | decimal }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <form method="post" action="/buildings" id="building-form" class="form">
+      <label>各楼固定正方差（按楼号顺序填写，正数，至多 {{ max_buildings }} 栋）</label>
+      <div class="variance-grid" id="variance-grid">
+        {% for i in range(max_buildings) %}
+          <div class="variance-field">
+            <label class="variance-label" for="variance-{{ i + 1 }}">
+              <span class="building-number">{{ i + 1 }}</span> 号楼
+            </label>
+            <input id="variance-{{ i + 1 }}" name="variance"
+                   value="{{ variance_values[i] if variance_values and i < variance_values|length else '' }}"
+                   inputmode="decimal" placeholder="如 1、0.5、1/2"
+                   data-building-no="{{ i + 1 }}">
+          </div>
+        {% endfor %}
+      </div>
+
+      <details class="bulk-entry" open>
+        <summary>批量粘贴：每行一个，也可用逗号或空格分隔</summary>
+        <label for="variances" class="visually-hidden">批量方差文本</label>
+        <textarea id="variances" name="variances" rows="5"
+          placeholder="例如：&#10;1/2&#10;0.8&#10;2">{{ building_text }}</textarea>
+      </details>
+
+      <div class="actions">
+        <button type="submit" id="save-buildings">录入并保存方差</button>
+        <span class="hint">保存为整组替换；已有报告引用的楼号不能被删除。</span>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" id="report-section">
+    <div class="card-head">
+      <h2><span class="step">2</span>按编号录入或重报报告</h2>
+      <span class="pill" id="report-count-pill">
+        当前 {{ state.reports|length if state else 0 }} / {{ max_reports }} 份
+      </span>
+    </div>
+
+    <form method="post" action="/reports" id="report-form" class="form">
+      <div class="grid-two">
+        <div>
+          <label for="report_id">报告编号</label>
+          <input id="report_id" name="report_id" required maxlength="64"
+                 value="{{ report_form.report_id }}" placeholder="例如 R1 或 1">
+        </div>
+        <div>
+          <label for="mean">覆盖楼宇的等权均值（精确小数或分数）</label>
+          <input id="mean" name="mean" required
+                 value="{{ report_form.mean }}" placeholder="例如 0.25、1/4">
+        </div>
+      </div>
+
+      <label for="buildings">覆盖楼号 / 楼宇编号（逗号、空格或顿号分隔）</label>
+      <input id="buildings" name="buildings"
+             value="{{ report_form.buildings }}" placeholder="例如 1, 2, 3">
+
+      {% if state and state.buildings %}
+        <fieldset class="checkbox-grid" id="coverage-checkboxes">
+          <legend>也可勾选覆盖楼宇</legend>
+          {% for building in state.buildings %}
+            <label class="checkbox-label">
+              <input type="checkbox" name="building_ids"
+                     value="{{ building.building_no }}"
+                     data-code="{{ building.code }}"
+                     {% if building.building_no in report_form.selected %}checked{% endif %}>
+              <span>
+                <strong>{{ building.building_no }}</strong>
+                {% if building.code != building.building_no | string %}（{{ building.code }}）{% endif %}
+                <span class="muted">σ²={{ building.variance_text }}</span>
+              </span>
+            </label>
+          {% endfor %}
+        </fieldset>
+      {% else %}
+        <p class="hint">请先在上方录入楼宇方差，再选择覆盖楼宇。</p>
+      {% endif %}
+
+      <div class="actions">
+        <button type="submit" id="save-report">录入或重报报告</button>
+        <a class="button secondary" href="/#report-form">清空填写</a>
+      </div>
+    </form>
+
+    {% if state and state.reports %}
+      <table class="data-table" id="report-table">
+        <thead>
+          <tr><th>报告编号</th><th>覆盖楼宇</th><th>份数/楼数</th><th>等权均值</th><th>操作</th></tr>
+        </thead>
+        <tbody>
+        {% for report in state.reports %}
+          <tr class="report-row" data-report-id="{{ report.report_id }}">
+            <td class="report-id"><strong>{{ report.report_id }}</strong></td>
+            <td class="coverage">{{ report.building_codes | join("、") }}</td>
+            <td>{{ report.coverage_count }}</td>
+            <td class="mean exact-number">
+              {{ report.mean_text }}
+              {% set mean_decimal = report.mean_text | decimal %}
+              {% if mean_decimal and "/" in report.mean_text %}
+                <span class="muted">（约 {{ mean_decimal }}）</span>
+              {% endif %}
+            </td>
+            <td class="row-actions">
+              <a class="button small secondary"
+                 href="/?edit={{ report.report_id | urlencode }}#report-form">重报填入</a>
+              <form method="post" action="/reports/delete"
+                    class="inline delete-form"
+                    data-report-id="{{ report.report_id }}">
+                <input type="hidden" name="report_id" value="{{ report.report_id }}">
+                <button type="submit" class="small danger">删除</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  <section class="card result-card" id="result" data-alias="result-section">
+   <div id="result-section">
+    <div class="card-head">
+      <h2><span class="step">3</span>合算值与方差</h2>
+      <form method="post" action="/recompute" class="inline">
+        <button type="submit" class="secondary" id="recompute">重新核算</button>
+      </form>
+    </div>
+
+    {% if not computation or computation.status == 'no_buildings' %}
+      <div class="notice" id="empty-state">
+        <p><strong>尚未开始核算。</strong></p>
+        <p>{{ computation.message if computation else '请先录入至多 20 栋楼的正方差。' }}</p>
+      </div>
+    {% elif computation.status == 'no_reports' %}
+      <div class="notice" id="empty-state">
+        <p><strong>方差已就绪，尚未录入报告。</strong></p>
+        <p>{{ computation.message }}</p>
+      </div>
+    {% elif computation.status == 'conflict' %}
+      <div class="conflict-panel" id="conflict-panel" role="alert">
+        <h3>报告均值冲突；合算值已撤下</h3>
+        <p>若这些均值不能由同一组楼宇估计值产生，下面给出一组不能同时成立的报告编号：</p>
+        <div id="conflict-reports" data-testid="conflict-reports">
+          <p class="conflict-id-list" id="conflict-id-list" data-testid="conflict-ids"
+             data-conflict-ids='{{ computation.conflict_ids | tojson }}'>
+            {% for report_id in computation.conflict_ids %}
+              <span class="conflict-id" data-report-id="{{ report_id }}">{{ report_id }}</span>{% if not loop.last %}、{% endif %}
+            {% endfor %}
+          </p>
+        </div>
+        <p class="hint">该组为按编号顺序找到的最小基数极小冲突。合规重报已替换旧稿，但不会显示旧合算值。</p>
+
+        {% if computation.minimal_conflicts and computation.minimal_conflicts | length > 1 %}
+          <details>
+            <summary>查看全部极小冲突组（{{ computation.minimal_conflicts | length }} 组）</summary>
+            <ul id="all-conflict-sets">
+              {% for group in computation.minimal_conflicts %}
+                <li class="conflict-set">{{ group | join("、") }}</li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+      </div>
+    {% elif computation.status == 'ok' %}
+      <div class="ok-panel" id="ok-panel"
+           data-estimate="{{ computation.estimate }}"
+           data-variance="{{ computation.variance }}"
+           data-testid="ok-panel">
+        <div class="metric">
+          <span class="metric-label">最小方差线性无偏合算平均节能量 μ̂</span>
+          <span id="estimate" class="metric-value-alias">
+            <span class="metric-value" id="combined-value" data-testid="combined-estimate">
+              {{ computation.estimate_info.fraction }}
+            </span>
+          </span>
+          <span class="metric-decimal" id="combined-value-decimal">
+            {% if '/' in computation.estimate_info.fraction %}
+              约 {{ computation.estimate_decimal }}
+            {% else %}
+              精确值
+            {% endif %}
+          </span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">合算方差 Var(μ̂)</span>
+          <span id="variance" class="metric-value-alias">
+            <span class="metric-value" id="combined-variance" data-testid="combined-variance">
+              {{ computation.variance_info.fraction }}
+            </span>
+          </span>
+          <span class="metric-decimal" id="combined-variance-decimal">
+            {% if '/' in computation.variance_info.fraction %}
+              约 {{ computation.variance_decimal }}
+            {% else %}
+              精确值
+            {% endif %}
+          </span>
+        </div>
+      </div>
+      <p class="hint">{{ computation.message }} 冗余/重复报告在一致时不会使方差变小，即不会提高精度。</p>
+
+      {% if computation.weights %}
+        <details open>
+          <summary>BLUE 权重（合计为 1）</summary>
+          <table class="data-table compact" id="weights-table">
+            <thead><tr><th>报告</th><th>精确权重</th><th>小数</th></tr></thead>
+            <tbody>
+            {% for report_id in computation.report_ids %}
+              <tr>
+                <td>{{ report_id }}</td>
+                <td class="exact-number">{{ computation.weights[loop.index0] }}</td>
+                <td>{{ computation.weights_float[loop.index0] }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </details>
+      {% endif %}
+
+      {% if computation.covariance %}
+        <details>
+          <summary>报告协方差矩阵 C（共用楼宇协方差）</summary>
+          <div class="table-scroll">
+            <table class="data-table compact covariance-table" id="covariance-table">
+              <thead>
+                <tr><th></th>
+                  {% for report_id in computation.report_ids %}<th>{{ report_id }}</th>{% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+              {% for row in computation.covariance %}
+                <tr>
+                  <th>{{ computation.report_ids[loop.index0] }}</th>
+                  {% for value in row %}
+                    <td class="exact-number">{{ value }}</td>
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      {% endif %}
+    {% endif %}
+   </div>
+  </section>
+
+  <section class="card danger-zone">
+    <h2>清空本轮数据</h2>
+    <form method="post" action="/reset" class="inline"
+          onsubmit="return confirm('确认清空全部楼宇、报告和合算状态？');">
+      <button type="submit" class="danger" id="reset">清空并重置</button>
+    </form>
+    <span class="hint">SQLite 数据与合算状态保存在 Docker 命名卷中。</span>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>Flask + SQLite · 精确 Fraction 核算 · Docker Compose 可启动</span>
+  </div>
+</footer>
+<script id="computation-payload" type="application/json">{{ computation | tojson }}</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
